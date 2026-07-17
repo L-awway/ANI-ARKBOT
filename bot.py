@@ -18,7 +18,6 @@ ADMINS_FILE = "admins.json"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # ===== РАБОТА С АДМИНАМИ =====
-# ===== РАБОТА С АДМИНАМИ =====
 def load_admins():
     if os.path.exists(ADMINS_FILE):
         with open(ADMINS_FILE, "r", encoding="utf-8") as f:
@@ -39,6 +38,36 @@ def is_admin(user_id):
 def is_owner_or_admin(message):
     user_id = message.from_user.id
     return is_owner(user_id) or is_admin(user_id)
+
+@bot.message_handler(commands=['add_admin_id'])
+def add_admin_by_id(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "⛔ Только владелец может добавлять админов.")
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "❌ Используйте: `/add_admin_id 123456789`", parse_mode="Markdown")
+        return
+
+    try:
+        user_id = int(parts[1])
+        
+        if user_id == OWNER_ID:
+            bot.reply_to(message, "👑 Владелец уже имеет все права!")
+            return
+        
+        admins = load_admins()
+        if user_id in admins:
+            bot.reply_to(message, f"⚠️ Пользователь с ID {user_id} уже является админом.")
+            return
+        
+        admins.append(user_id)
+        save_admins(admins)
+        bot.reply_to(message, f"✅ Пользователь с ID `{user_id}` добавлен в админы!", parse_mode="Markdown")
+        
+    except ValueError:
+        bot.reply_to(message, "❌ Введите корректный ID (только цифры)")
 
 # ===== КОМАНДА /add_admin (работает!) =====
 @bot.message_handler(commands=['add_admin'])
