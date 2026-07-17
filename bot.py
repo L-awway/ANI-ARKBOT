@@ -39,7 +39,7 @@ def is_owner_or_admin(message):
     user_id = message.from_user.id
     return is_owner(user_id) or is_admin(user_id)
 
-# ===== КОМАНДА /add_admin_id (ДОБАВЛЯЕТ ПО ID — РАБОТАЕТ ВСЕГДА!) =====
+# ===== КОМАНДА /add_admin_id (ДОБАВЛЯЕТ ПО ID) =====
 @bot.message_handler(commands=['add_admin_id'])
 def add_admin_by_id(message):
     if not is_owner(message.from_user.id):
@@ -70,90 +70,32 @@ def add_admin_by_id(message):
     except ValueError:
         bot.reply_to(message, "❌ Введите корректный ID (только цифры)")
 
-# ===== КОМАНДА /add_admin (ДОБАВЛЯЕТ ПО @USERNAME) =====
-@bot.message_handler(commands=['add_admin'])
-def add_admin(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "⛔ Только владелец может добавлять админов.")
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.reply_to(message, "❌ Используйте: `/add_admin @username`\nНапример: `/add_admin @ivan`", parse_mode="Markdown")
-        return
-
-    username = parts[1]
-    if not username.startswith('@'):
-        bot.reply_to(message, "❌ Укажите @username")
-        return
-
-    try:
-        user_info = bot.get_chat(username)
-        user_id = user_info.id
-        
-        if user_id == OWNER_ID:
-            bot.reply_to(message, "👑 Владелец уже имеет все права!")
-            return
-        
-        admins = load_admins()
-        if user_id in admins:
-            bot.reply_to(message, f"⚠️ Пользователь {username} уже является админом.")
-            return
-        
-        admins.append(user_id)
-        save_admins(admins)
-        bot.reply_to(message, f"✅ Пользователь {username} добавлен в админы!")
-        
-    except Exception as e:
-        bot.reply_to(
-            message,
-            f"❌ Не удалось найти пользователя {username}.\n\n"
-            f"**Причина:** бот не может найти пользователя, который ещё не писал ему.\n\n"
-            f"**Решение:**\n"
-            f"1️⃣ Попросите пользователя написать боту `/start`\n"
-            f"2️⃣ Затем узнайте его ID через @userinfobot\n"
-            f"3️⃣ Используйте: `/add_admin_id 123456789`\n\n"
-            f"Или попросите пользователя написать боту, после чего попробуйте `/add_admin @{username}` снова.",
-            parse_mode="Markdown"
-        )
-
-# ===== КОМАНДА /remove_admin (УДАЛЯЕТ АДМИНА) =====
-@bot.message_handler(commands=['remove_admin'])
-def remove_admin(message):
+# ===== КОМАНДА /remove_admin_id (УДАЛЯЕТ ПО ID) =====
+@bot.message_handler(commands=['remove_admin_id'])
+def remove_admin_by_id(message):
     if not is_owner(message.from_user.id):
         bot.reply_to(message, "⛔ Только владелец может удалять админов.")
         return
 
     parts = message.text.split()
     if len(parts) < 2:
-        bot.reply_to(message, "❌ Используйте: `/remove_admin @username`\nНапример: `/remove_admin @ivan`", parse_mode="Markdown")
-        return
-
-    username = parts[1]
-    if not username.startswith('@'):
-        bot.reply_to(message, "❌ Укажите @username")
+        bot.reply_to(message, "❌ Используйте: `/remove_admin_id 123456789`", parse_mode="Markdown")
         return
 
     try:
-        user_info = bot.get_chat(username)
-        user_id = user_info.id
+        user_id = int(parts[1])
         
         admins = load_admins()
         if user_id not in admins:
-            bot.reply_to(message, f"⚠️ Пользователь {username} не является админом.")
+            bot.reply_to(message, f"⚠️ Пользователь с ID {user_id} не является админом.")
             return
         
         admins.remove(user_id)
         save_admins(admins)
-        bot.reply_to(message, f"✅ Пользователь {username} удалён из админов!")
+        bot.reply_to(message, f"✅ Пользователь с ID `{user_id}` удалён из админов!", parse_mode="Markdown")
         
-    except Exception as e:
-        bot.reply_to(
-            message,
-            f"❌ Не удалось найти пользователя {username}.\n\n"
-            f"Удалите ID вручную из файла `admins.json`",
-            parse_mode="Markdown"
-        )
+    except ValueError:
+        bot.reply_to(message, "❌ Введите корректный ID (только цифры)")
 
 # ===== КОМАНДА /admins_list (СПИСОК АДМИНОВ) =====
 @bot.message_handler(commands=['admins_list'])
@@ -172,9 +114,9 @@ def admins_list(message):
         try:
             user = bot.get_chat(admin_id)
             username = user.username or f"ID: {admin_id}"
-            text += f"{i}. @{username}\n"
+            text += f"{i}. @{username} (ID: `{admin_id}`)\n"
         except:
-            text += f"{i}. ID: {admin_id}\n"
+            text += f"{i}. ID: `{admin_id}`\n"
     
     text += f"\n👑 Владелец: `{OWNER_ID}`"
 
@@ -234,13 +176,13 @@ def start(message):
         "`/question` — увеличить счётчик вопросов (+1)\n"
         "`/questions_remove N` — убрать N вопросов\n"
         "`/questions_set N` — установить точное количество вопросов\n"
-        "`/add_admin @user` — добавить админа (только владелец)\n"
         "`/add_admin_id 123456789` — добавить админа по ID (только владелец)\n"
-        "`/remove_admin @user` — удалить админа (только владелец)\n"
+        "`/remove_admin_id 123456789` — удалить админа по ID (только владелец)\n"
         "`/admins_list` — список админов\n"
         "`/top` — таблица лидеров\n"
         "`/reset` — обнулить всё (только владелец)\n"
         "`/save` — сохранить сезон\n\n"
+        "💡 *Как узнать свой ID:* напишите @userinfobot\n\n"
         "Удачи в викторине! 🍀",
         parse_mode="Markdown",
         reply_markup=markup
@@ -518,10 +460,10 @@ def help_command(message):
         "`/save` — сохранить сезон\n\n"
         "**Только для владельца:**\n"
         "`/reset` — обнулить всё\n"
-        "`/add_admin @user` — добавить админа\n"
         "`/add_admin_id 123456789` — добавить админа по ID\n"
-        "`/remove_admin @user` — удалить админа\n"
-        "`/admins_list` — список админов"
+        "`/remove_admin_id 123456789` — удалить админа по ID\n"
+        "`/admins_list` — список админов\n\n"
+        "💡 *Как узнать ID:* напишите @userinfobot"
     )
     bot.reply_to(message, help_text, parse_mode="Markdown")
 
