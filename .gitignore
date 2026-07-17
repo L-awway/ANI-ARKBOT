@@ -1,0 +1,6 @@
+scores.json
+questions_count.json
+admins.json
+season_*.json
+__pycache__/
+*.pyc
