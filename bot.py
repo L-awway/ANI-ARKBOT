@@ -390,6 +390,9 @@ def show_top(message):
     text += f"📊 Всего участников: {len(filtered_scores)}\n\n"
 
     for i, (user, score) in enumerate(sorted_users, 1):
+        # Убираем @, чтобы не тегать
+        display_name = user.replace('@', '')
+        
         if i == 1:
             medal = "🥇"
             bonus = "👑"
@@ -407,7 +410,7 @@ def show_top(message):
         filled = int((score / max_score) * bar_length) if max_score > 0 else 0
         bar = "█" * filled + "░" * (bar_length - filled)
 
-        text += f"{medal} {user} {bonus} - {score}\n\n"
+        text += f"{medal} *{display_name}* {bonus} - {score}\n\n"
 
     bot.reply_to(message, text, parse_mode="Markdown")
 
