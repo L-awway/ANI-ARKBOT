@@ -39,6 +39,7 @@ def is_owner_or_admin(message):
     user_id = message.from_user.id
     return is_owner(user_id) or is_admin(user_id)
 
+# ===== КОМАНДА /add_admin_id (ДОБАВЛЯЕТ ПО ID — РАБОТАЕТ ВСЕГДА!) =====
 @bot.message_handler(commands=['add_admin_id'])
 def add_admin_by_id(message):
     if not is_owner(message.from_user.id):
@@ -69,10 +70,9 @@ def add_admin_by_id(message):
     except ValueError:
         bot.reply_to(message, "❌ Введите корректный ID (только цифры)")
 
-# ===== КОМАНДА /add_admin (работает!) =====
+# ===== КОМАНДА /add_admin (ДОБАВЛЯЕТ ПО @USERNAME) =====
 @bot.message_handler(commands=['add_admin'])
 def add_admin(message):
-    # Только владелец может добавлять админов
     if not is_owner(message.from_user.id):
         bot.reply_to(message, "⛔ Только владелец может добавлять админов.")
         return
@@ -87,24 +87,19 @@ def add_admin(message):
         bot.reply_to(message, "❌ Укажите @username")
         return
 
-    # Пытаемся найти пользователя по username
     try:
-        # Делаем запрос к Telegram API, чтобы получить ID пользователя
         user_info = bot.get_chat(username)
         user_id = user_info.id
         
-        # Проверяем, не является ли пользователь владельцем
         if user_id == OWNER_ID:
             bot.reply_to(message, "👑 Владелец уже имеет все права!")
             return
         
-        # Проверяем, не добавлен ли уже
         admins = load_admins()
         if user_id in admins:
             bot.reply_to(message, f"⚠️ Пользователь {username} уже является админом.")
             return
         
-        # Добавляем админа
         admins.append(user_id)
         save_admins(admins)
         bot.reply_to(message, f"✅ Пользователь {username} добавлен в админы!")
@@ -113,18 +108,18 @@ def add_admin(message):
         bot.reply_to(
             message,
             f"❌ Не удалось найти пользователя {username}.\n\n"
-            f"Возможные причины:\n"
-            f"1️⃣ У пользователя нет @username\n"
-            f"2️⃣ Пользователь ещё не писал боту\n"
-            f"3️⃣ Неправильно указан username\n\n"
-            f"Попробуйте узнать ID через @userinfobot и добавить вручную в файл `admins.json`",
+            f"**Причина:** бот не может найти пользователя, который ещё не писал ему.\n\n"
+            f"**Решение:**\n"
+            f"1️⃣ Попросите пользователя написать боту `/start`\n"
+            f"2️⃣ Затем узнайте его ID через @userinfobot\n"
+            f"3️⃣ Используйте: `/add_admin_id 123456789`\n\n"
+            f"Или попросите пользователя написать боту, после чего попробуйте `/add_admin @{username}` снова.",
             parse_mode="Markdown"
         )
 
-# ===== КОМАНДА /remove_admin (работает!) =====
+# ===== КОМАНДА /remove_admin (УДАЛЯЕТ АДМИНА) =====
 @bot.message_handler(commands=['remove_admin'])
 def remove_admin(message):
-    # Только владелец может удалять админов
     if not is_owner(message.from_user.id):
         bot.reply_to(message, "⛔ Только владелец может удалять админов.")
         return
@@ -160,7 +155,7 @@ def remove_admin(message):
             parse_mode="Markdown"
         )
 
-# ===== КОМАНДА /admins_list =====
+# ===== КОМАНДА /admins_list (СПИСОК АДМИНОВ) =====
 @bot.message_handler(commands=['admins_list'])
 def admins_list(message):
     if not is_owner_or_admin(message):
@@ -174,18 +169,16 @@ def admins_list(message):
 
     text = "👥 *Список админов:*\n\n"
     for i, admin_id in enumerate(admins, 1):
-        # Пытаемся получить username по ID
         try:
             user = bot.get_chat(admin_id)
             username = user.username or f"ID: {admin_id}"
+            text += f"{i}. @{username}\n"
         except:
-            username = f"ID: {admin_id}"
-        text += f"{i}. @{username}\n"
+            text += f"{i}. ID: {admin_id}\n"
     
     text += f"\n👑 Владелец: `{OWNER_ID}`"
 
     bot.reply_to(message, text, parse_mode="Markdown")
-
 
 # ===== ОСТАЛЬНЫЕ ФУНКЦИИ =====
 def load_scores():
@@ -242,6 +235,7 @@ def start(message):
         "`/questions_remove N` — убрать N вопросов\n"
         "`/questions_set N` — установить точное количество вопросов\n"
         "`/add_admin @user` — добавить админа (только владелец)\n"
+        "`/add_admin_id 123456789` — добавить админа по ID (только владелец)\n"
         "`/remove_admin @user` — удалить админа (только владелец)\n"
         "`/admins_list` — список админов\n"
         "`/top` — таблица лидеров\n"
@@ -354,71 +348,6 @@ def set_questions(message):
 
     save_questions_count(n)
     bot.reply_to(message, f"✅ Количество вопросов установлено: *{n}*", parse_mode="Markdown")
-
-# ===== КОМАНДА /add_admin (только владелец) =====
-@bot.message_handler(commands=['add_admin'])
-def add_admin(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "⛔ Только владелец может добавлять админов.")
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.reply_to(message, "❌ Используйте: `/add_admin @username`\nНапример: `/add_admin @ivan`", parse_mode="Markdown")
-        return
-
-    username = parts[1]
-    if not username.startswith('@'):
-        bot.reply_to(message, "❌ Укажите @username")
-        return
-
-    bot.reply_to(
-        message,
-        f"⚠️ Чтобы добавить админа, пользователь должен:\n"
-        f"1️⃣ Написать боту `/start`\n"
-        f"2️⃣ После этого вы сможете добавить его по ID\n\n"
-        f"Пока что добавьте ID вручную в файл `admins.json`\n"
-        f"Узнать ID можно через @userinfobot",
-        parse_mode="Markdown"
-    )
-
-# ===== КОМАНДА /remove_admin (только владелец) =====
-@bot.message_handler(commands=['remove_admin'])
-def remove_admin(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "⛔ Только владелец может удалять админов.")
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.reply_to(message, "❌ Используйте: `/remove_admin @username`\nНапример: `/remove_admin @ivan`", parse_mode="Markdown")
-        return
-
-    username = parts[1]
-    if not username.startswith('@'):
-        bot.reply_to(message, "❌ Укажите @username")
-        return
-
-    bot.reply_to(message, "⚠️ В разработке. Пока удалите ID вручную из файла `admins.json`")
-
-# ===== КОМАНДА /admins_list =====
-@bot.message_handler(commands=['admins_list'])
-def admins_list(message):
-    if not is_owner_or_admin(message):
-        bot.reply_to(message, "⛔ Доступ только у админов.")
-        return
-
-    admins = load_admins()
-    if not admins:
-        bot.reply_to(message, "👥 Список админов пуст.")
-        return
-
-    text = "👥 *Список админов:*\n\n"
-    for i, admin_id in enumerate(admins, 1):
-        text += f"{i}. `{admin_id}`\n"
-    text += f"\n👑 Владелец: `{OWNER_ID}`"
-
-    bot.reply_to(message, text, parse_mode="Markdown")
 
 # ===== КОМАНДА /remove (отнять баллы) =====
 @bot.message_handler(commands=['remove'])
@@ -540,7 +469,7 @@ def show_top(message):
 # ===== КОМАНДА /reset (ТОЛЬКО ВЛАДЕЛЕЦ!) =====
 @bot.message_handler(commands=['reset'])
 def reset_scores(message):
-    global scores  # <--- ОБЯЗАТЕЛЬНО ПЕРВОЙ СТРОКОЙ!
+    global scores
     
     if not is_owner(message.from_user.id):
         bot.reply_to(message, "⛔ Только владелец может обнулить таблицу!")
@@ -590,6 +519,7 @@ def help_command(message):
         "**Только для владельца:**\n"
         "`/reset` — обнулить всё\n"
         "`/add_admin @user` — добавить админа\n"
+        "`/add_admin_id 123456789` — добавить админа по ID\n"
         "`/remove_admin @user` — удалить админа\n"
         "`/admins_list` — список админов"
     )
