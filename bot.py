@@ -407,7 +407,7 @@ def show_top(message):
         filled = int((score / max_score) * bar_length) if max_score > 0 else 0
         bar = "█" * filled + "░" * (bar_length - filled)
 
-        text += f"{medal} *{user}* {bonus} - {score}\n\n"
+        text += f"{medal} {user} {bonus} - {score}\n\n"
 
     bot.reply_to(message, text, parse_mode="Markdown")
 
