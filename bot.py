@@ -13,9 +13,46 @@ OWNER_ID = 7080227092
 DATA_FILE = "scores.json"
 QUESTIONS_FILE = "questions_count.json"
 ADMINS_FILE = "admins.json"
+NICKS_FILE = "nicks.json"  # НОВЫЙ ФАЙЛ ДЛЯ ХРАНЕНИЯ КЛИЧЕК
 # =====================
 
 bot = telebot.TeleBot(BOT_TOKEN)
+
+# ===== ПРОВЕРКА ФАЙЛОВ =====
+def ensure_files_exist():
+    if not os.path.exists(ADMINS_FILE):
+        with open(ADMINS_FILE, "w", encoding="utf-8") as f:
+            json.dump({"admins": []}, f, indent=2, ensure_ascii=False)
+    if not os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=2, ensure_ascii=False)
+    if not os.path.exists(QUESTIONS_FILE):
+        with open(QUESTIONS_FILE, "w", encoding="utf-8") as f:
+            json.dump({"count": 0}, f, indent=2, ensure_ascii=False)
+    if not os.path.exists(NICKS_FILE):
+        with open(NICKS_FILE, "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=2, ensure_ascii=False)
+
+ensure_files_exist()
+
+# ===== РАБОТА С КЛИЧКАМИ =====
+def load_nicks():
+    if os.path.exists(NICKS_FILE):
+        with open(NICKS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_nicks(nicks):
+    with open(NICKS_FILE, "w", encoding="utf-8") as f:
+        json.dump(nicks, f, indent=2, ensure_ascii=False)
+
+def get_display_name(username):
+    """Возвращает кличку, если есть, или имя без @"""
+    nicks = load_nicks()
+    clean_name = username.lower().replace('@', '')
+    if clean_name in nicks:
+        return nicks[clean_name]
+    return clean_name
 
 # ===== РАБОТА С АДМИНАМИ =====
 def load_admins():
@@ -41,6 +78,74 @@ def is_owner_or_admin(message):
 
 # ===== СЛОВАРЬ ДЛЯ ХРАНЕНИЯ СОСТОЯНИЙ ПОДТВЕРЖДЕНИЯ =====
 waiting_for_confirmation = {}
+
+# ===== КОМАНДА /nick (установить кличку) =====
+@bot.message_handler(commands=['nick'])
+def set_nick(message):
+    if not is_owner_or_admin(message):
+        bot.reply_to(message, "⛔ Доступ только у админов.")
+        return
+
+    parts = message.text.split()
+    if len(parts) < 3:
+        bot.reply_to(
+            message,
+            "❌ Используйте: `/nick @username НоваяКличка`\n"
+            "Например: `/nick @ivan Космонавт`",
+            parse_mode="Markdown"
+        )
+        return
+
+    username = parts[1].lower()
+    if not username.startswith('@'):
+        bot.reply_to(message, "❌ Укажите @username")
+        return
+
+    # Убираем @ для поиска
+    clean_username = username.replace('@', '')
+    
+    # Проверяем, есть ли такой пользователь в таблице
+    if clean_username not in scores and f"@{clean_username}" not in scores:
+        # Проверяем с @
+        if clean_username not in scores:
+            bot.reply_to(message, f"❌ Пользователь {username} не найден в таблице.")
+            return
+
+    new_nick = " ".join(parts[2:])
+    
+    nicks = load_nicks()
+    nicks[clean_username] = new_nick
+    save_nicks(nicks)
+    
+    bot.reply_to(message, f"✅ Пользователю {username} присвоена кличка: *{new_nick}*", parse_mode="Markdown")
+
+# ===== КОМАНДА /nick_remove (удалить кличку) =====
+@bot.message_handler(commands=['nick_remove'])
+def remove_nick(message):
+    if not is_owner_or_admin(message):
+        bot.reply_to(message, "⛔ Доступ только у админов.")
+        return
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        bot.reply_to(message, "❌ Используйте: `/nick_remove @username`\nНапример: `/nick_remove @ivan`", parse_mode="Markdown")
+        return
+
+    username = parts[1].lower()
+    if not username.startswith('@'):
+        bot.reply_to(message, "❌ Укажите @username")
+        return
+
+    clean_username = username.replace('@', '')
+    
+    nicks = load_nicks()
+    if clean_username not in nicks:
+        bot.reply_to(message, f"⚠️ У пользователя {username} нет клички.")
+        return
+
+    del nicks[clean_username]
+    save_nicks(nicks)
+    bot.reply_to(message, f"✅ Кличка пользователя {username} удалена.")
 
 # ===== КОМАНДА /add_admin_id =====
 @bot.message_handler(commands=['add_admin_id'])
@@ -117,7 +222,8 @@ def admins_list(message):
         try:
             user = bot.get_chat(admin_id)
             username = user.username or f"ID: {admin_id}"
-            text += f"{i}. @{username} (ID: `{admin_id}`)\n"
+            display_name = get_display_name(username)
+            text += f"{i}. {display_name}\n"
         except:
             text += f"{i}. ID: `{admin_id}`\n"
     
@@ -176,6 +282,8 @@ def start(message):
         "3️⃣ Админ **отвечает на сообщение** участника и пишет `/add`\n\n"
         "📊 *Команды:*\n"
         "`/add @user [N]` — начислить баллы\n"
+        "`/nick @user Кличка` — дать участнику кличку\n"
+        "`/nick_remove @user` — удалить кличку\n"
         "`/question` — увеличить счётчик вопросов (+1)\n"
         "`/questions_remove N` — убрать N вопросов\n"
         "`/questions_set N` — установить точное количество вопросов\n"
@@ -227,11 +335,14 @@ def add_score(message):
         except ValueError:
             continue
 
-    scores[username] = scores.get(username, 0) + points
+    # Сохраняем в чистом виде (без @)
+    clean_username = username.replace('@', '')
+    scores[clean_username] = scores.get(clean_username, 0) + points
     save_scores(scores)
 
     word = "балл" if points == 1 else "балла" if points in [2,3,4] else "баллов"
-    bot.reply_to(message, f"✅ {username} +{points} {word}! Всего: {scores[username]}")
+    display_name = get_display_name(clean_username)
+    bot.reply_to(message, f"✅ {display_name} +{points} {word}! Всего: {scores[clean_username]}")
 
 # ===== КОМАНДА /question =====
 @bot.message_handler(commands=['question'])
@@ -321,6 +432,8 @@ def remove_score(message):
         bot.reply_to(message, "❌ Не найден пользователь!\nУкажите @username или ответьте на сообщение участника.")
         return
 
+    clean_username = username.replace('@', '')
+    
     for part in parts:
         try:
             num = int(part)
@@ -330,13 +443,14 @@ def remove_score(message):
         except ValueError:
             continue
 
-    if username not in scores:
+    if clean_username not in scores:
         bot.reply_to(message, f"❌ У {username} нет баллов")
         return
 
-    scores[username] = max(0, scores[username] - points)
+    scores[clean_username] = max(0, scores[clean_username] - points)
     save_scores(scores)
-    bot.reply_to(message, f"➖ {username} -{points} баллов. Осталось: {scores[username]}")
+    display_name = get_display_name(clean_username)
+    bot.reply_to(message, f"➖ {display_name} -{points} баллов. Осталось: {scores[clean_username]}")
 
 # ===== КОМАНДА /delete =====
 @bot.message_handler(commands=['delete'])
@@ -364,15 +478,24 @@ def delete_user(message):
         bot.reply_to(message, "❌ Не найден пользователь!\nУкажите @username или ответьте на сообщение участника.")
         return
 
-    if username not in scores:
+    clean_username = username.replace('@', '')
+
+    if clean_username not in scores:
         bot.reply_to(message, f"❌ Пользователь {username} не найден в таблице.")
         return
 
-    del scores[username]
+    del scores[clean_username]
     save_scores(scores)
+    
+    # Удаляем и кличку, если она есть
+    nicks = load_nicks()
+    if clean_username in nicks:
+        del nicks[clean_username]
+        save_nicks(nicks)
+    
     bot.reply_to(message, f"🗑️ Пользователь {username} удалён из таблицы!")
 
-# ===== КОМАНДА /top =====
+# ===== КОМАНДА /top (без тегов, с кличками) =====
 @bot.message_handler(commands=['top'])
 def show_top(message):
     filtered_scores = {k: v for k, v in scores.items() if v > 0}
@@ -390,8 +513,7 @@ def show_top(message):
     text += f"📊 Всего участников: {len(filtered_scores)}\n\n"
 
     for i, (user, score) in enumerate(sorted_users, 1):
-        # Убираем @, чтобы не тегать
-        display_name = user.replace('@', '')
+        display_name = get_display_name(user)
         
         if i == 1:
             medal = "🥇"
@@ -425,10 +547,8 @@ def reset_scores(message):
         bot.reply_to(message, "📭 Таблица и так пуста. Нечего удалять.")
         return
 
-    # Запоминаем, кто запросил удаление
     waiting_for_confirmation[message.chat.id] = True
 
-    # Спрашиваем подтверждение
     bot.reply_to(
         message,
         "⚠️ *ВНИМАНИЕ!*\n\n"
@@ -449,16 +569,16 @@ def confirm_reset(message):
         bot.reply_to(message, "⛔ Только владелец может обнулить таблицу!")
         return
 
-    # Удаляем из списка ожидания
     waiting_for_confirmation.pop(message.chat.id, None)
 
-    # Проверяем, написал ли пользователь "ДА"
     if message.text.strip().upper() == "ДА":
         global scores
         scores = {}
         save_scores(scores)
         reset_questions_count()
-        bot.reply_to(message, "🗑️ Таблица и счётчик вопросов обнулены владельцем!")
+        # Очищаем клички при обнулении
+        save_nicks({})
+        bot.reply_to(message, "🗑️ Таблица, счётчик вопросов и клички обнулены владельцем!")
     else:
         bot.reply_to(message, "❌ Удаление отменено. Таблица сохранена.")
 
@@ -471,7 +591,8 @@ def save_season(message):
 
     data = {
         "scores": scores,
-        "questions_count": load_questions_count()
+        "questions_count": load_questions_count(),
+        "nicks": load_nicks()
     }
     filename = f"season_{datetime.now().strftime('%Y%m%d_%H%M')}.json"
     with open(filename, "w", encoding="utf-8") as f:
@@ -488,6 +609,8 @@ def help_command(message):
         "`/top` — Таблица лидеров\n\n"
         "**Для админов:**\n"
         "`/add @user [N]` — начислить баллы\n"
+        "`/nick @user Кличка` — дать участнику кличку\n"
+        "`/nick_remove @user` — удалить кличку\n"
         "`/remove @user [N]` — отнять баллы\n"
         "`/delete @user` — удалить пользователя\n"
         "`/question` — новый вопрос (+1)\n"
