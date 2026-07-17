@@ -39,7 +39,10 @@ def is_owner_or_admin(message):
     user_id = message.from_user.id
     return is_owner(user_id) or is_admin(user_id)
 
-# ===== КОМАНДА /add_admin_id (ДОБАВЛЯЕТ ПО ID) =====
+# ===== СЛОВАРЬ ДЛЯ ХРАНЕНИЯ СОСТОЯНИЙ ПОДТВЕРЖДЕНИЯ =====
+waiting_for_confirmation = {}
+
+# ===== КОМАНДА /add_admin_id =====
 @bot.message_handler(commands=['add_admin_id'])
 def add_admin_by_id(message):
     if not is_owner(message.from_user.id):
@@ -70,7 +73,7 @@ def add_admin_by_id(message):
     except ValueError:
         bot.reply_to(message, "❌ Введите корректный ID (только цифры)")
 
-# ===== КОМАНДА /remove_admin_id (УДАЛЯЕТ ПО ID) =====
+# ===== КОМАНДА /remove_admin_id =====
 @bot.message_handler(commands=['remove_admin_id'])
 def remove_admin_by_id(message):
     if not is_owner(message.from_user.id):
@@ -97,7 +100,7 @@ def remove_admin_by_id(message):
     except ValueError:
         bot.reply_to(message, "❌ Введите корректный ID (только цифры)")
 
-# ===== КОМАНДА /admins_list (СПИСОК АДМИНОВ) =====
+# ===== КОМАНДА /admins_list =====
 @bot.message_handler(commands=['admins_list'])
 def admins_list(message):
     if not is_owner_or_admin(message):
@@ -180,7 +183,7 @@ def start(message):
         "`/remove_admin_id 123456789` — удалить админа по ID (только владелец)\n"
         "`/admins_list` — список админов\n"
         "`/top` — таблица лидеров\n"
-        "`/reset` — обнулить всё (только владелец)\n"
+        "`/reset` — обнулить всё (только владелец, с подтверждением)\n"
         "`/save` — сохранить сезон\n\n"
         "💡 *Как узнать свой ID:* напишите @userinfobot\n\n"
         "Удачи в викторине! 🍀",
@@ -188,7 +191,7 @@ def start(message):
         reply_markup=markup
     )
 
-# ===== КОМАНДА /add (без счётчика вопросов) =====
+# ===== КОМАНДА /add =====
 @bot.message_handler(commands=['add'])
 def add_score(message):
     if not is_owner_or_admin(message):
@@ -291,7 +294,7 @@ def set_questions(message):
     save_questions_count(n)
     bot.reply_to(message, f"✅ Количество вопросов установлено: *{n}*", parse_mode="Markdown")
 
-# ===== КОМАНДА /remove (отнять баллы) =====
+# ===== КОМАНДА /remove =====
 @bot.message_handler(commands=['remove'])
 def remove_score(message):
     if not is_owner_or_admin(message):
@@ -408,11 +411,9 @@ def show_top(message):
 
     bot.reply_to(message, text, parse_mode="Markdown")
 
-# ===== КОМАНДА /reset (ТОЛЬКО ВЛАДЕЛЕЦ!) =====
+# ===== КОМАНДА /reset (С ПОДТВЕРЖДЕНИЕМ!) =====
 @bot.message_handler(commands=['reset'])
 def reset_scores(message):
-    global scores
-    
     if not is_owner(message.from_user.id):
         bot.reply_to(message, "⛔ Только владелец может обнулить таблицу!")
         return
@@ -421,10 +422,42 @@ def reset_scores(message):
         bot.reply_to(message, "📭 Таблица и так пуста. Нечего удалять.")
         return
 
-    scores = {}
-    save_scores(scores)
-    reset_questions_count()
-    bot.reply_to(message, "🗑️ Таблица и счётчик вопросов обнулены владельцем!")
+    # Запоминаем, кто запросил удаление
+    waiting_for_confirmation[message.chat.id] = True
+
+    # Спрашиваем подтверждение
+    bot.reply_to(
+        message,
+        "⚠️ *ВНИМАНИЕ!*\n\n"
+        "Вы собираетесь полностью удалить ТАБЛИЦУ ЛИДЕРОВ и СЧЁТЧИК ВОПРОСОВ.\n"
+        "Это действие нельзя отменить!\n\n"
+        f"📊 Будет удалено:\n"
+        f"• {len(scores)} участников\n"
+        f"• {load_questions_count()} вопросов\n\n"
+        "Для подтверждения напишите: `ДА`\n"
+        "Для отмены напишите что угодно другое.",
+        parse_mode="Markdown"
+    )
+
+# ===== ОБРАБОТЧИК ПОДТВЕРЖДЕНИЯ =====
+@bot.message_handler(func=lambda message: message.chat.id in waiting_for_confirmation)
+def confirm_reset(message):
+    if not is_owner(message.from_user.id):
+        bot.reply_to(message, "⛔ Только владелец может обнулить таблицу!")
+        return
+
+    # Удаляем из списка ожидания
+    waiting_for_confirmation.pop(message.chat.id, None)
+
+    # Проверяем, написал ли пользователь "ДА"
+    if message.text.strip().upper() == "ДА":
+        global scores
+        scores = {}
+        save_scores(scores)
+        reset_questions_count()
+        bot.reply_to(message, "🗑️ Таблица и счётчик вопросов обнулены владельцем!")
+    else:
+        bot.reply_to(message, "❌ Удаление отменено. Таблица сохранена.")
 
 # ===== КОМАНДА /save =====
 @bot.message_handler(commands=['save'])
@@ -459,7 +492,7 @@ def help_command(message):
         "`/questions_set N` — установить точное количество\n"
         "`/save` — сохранить сезон\n\n"
         "**Только для владельца:**\n"
-        "`/reset` — обнулить всё\n"
+        "`/reset` — обнулить всё (с подтверждением)\n"
         "`/add_admin_id 123456789` — добавить админа по ID\n"
         "`/remove_admin_id 123456789` — удалить админа по ID\n"
         "`/admins_list` — список админов\n\n"
