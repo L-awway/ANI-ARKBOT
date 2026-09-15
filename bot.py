@@ -14,7 +14,6 @@ ADMINS_FILE = "admins.json"
 NICKS_FILE = "nicks.json"
 LIMITS_FILE = "daily_limits.json"
 ANICARD_FILE = "anibattle_gifts.json"
-STARS_FILE = "telegram_gifts.json"
 # =====================
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -28,7 +27,6 @@ def ensure_files_exist():
         (NICKS_FILE, {}),
         (LIMITS_FILE, {}),
         (ANICARD_FILE, {"gifts": []}),
-        (STARS_FILE, {"gifts": []})
     ]:
         if not os.path.exists(f):
             with open(f, "w", encoding="utf-8") as file:
@@ -53,13 +51,11 @@ def save_json(file, data):
 
 # ===== МСК ВРЕМЯ =====
 def get_msk_date():
-    """Возвращает текущую дату по МСК"""
     msk = timezone(timedelta(hours=3))
     return datetime.now(msk).strftime("%Y-%m-%d")
 
 # ===== ЛИМИТЫ =====
 def check_limit(username):
-    """Проверяет, может ли пользователь ещё отвечать сегодня. Возвращает (можно, сколько_осталось)"""
     clean = username.lower().replace('@', '')
     today = get_msk_date()
     limits = load_json(LIMITS_FILE)
@@ -73,7 +69,6 @@ def check_limit(username):
     return True, 5 - count
 
 def add_limit(username):
-    """Увеличивает счётчик ответов пользователя"""
     clean = username.lower().replace('@', '')
     today = get_msk_date()
     limits = load_json(LIMITS_FILE)
@@ -171,10 +166,8 @@ def vhelp(message):
         "`/vquestion` — +1 вопрос\n"
         "`/vquestions_remove N` — убрать N\n"
         "`/vquestions_set N` — установить\n"
-        "`/vadd_card 92 Название` — добавить карту\n"
-        "`/vadd_card_remove 92` — удалить карту\n"
-        "`/vadd_stars 1 100` — звёзды за место\n"
-        "`/vadd_stars_remove 1` — убрать место\n\n"
+        "`/vadd_card 90 Сид 100` — добавить карту\n"
+        "`/vremove_card 90` — удалить карту\n\n"
         "*Только для владельца:*\n"
         "`/vadd_admin_id 123456789` — админ по ID\n"
         "`/vadd_admin @user` — админ по @\n"
@@ -252,7 +245,6 @@ def vadd(message):
     
     clean = username.replace('@', '').lower()
     
-    # ПРОВЕРКА ЛИМИТА
     can, remaining = check_limit(clean)
     if not can:
         bot.reply_to(
@@ -605,18 +597,17 @@ def vadmins_list(message):
     bot.reply_to(message, text, parse_mode="Markdown")
 
 # ============================================================
-# ПОДАРКИ
+# ПОДАРКИ (ANICARD)
 # ============================================================
 
 def get_gift_emoji(rating):
-    """Возвращает эмодзи по рейтингу"""
     r = int(rating)
     if 98 <= r <= 100:
-        return "🟣"  # миф
+        return "🟣"
     elif 87 <= r <= 90:
-        return "🔵"  # лега
+        return "🔵"
     elif 79 <= r <= 80:
-        return "🟢"  # эпик
+        return "🟢"
     else:
         return "⚪"
 
@@ -626,48 +617,52 @@ def vadd_card(message):
         bot.reply_to(message, "⛔ Доступ только у админов.")
         return
     
-    parts = message.text.split(maxsplit=2)
-    if len(parts) < 3:
-        bot.reply_to(message, "❌ Используйте: `/vadd_card 92 \"Название карты\"`", parse_mode="Markdown")
+    # Формат: /vadd_card РЕЙТИНГ НАЗВАНИЕ ЦЕНА
+    parts = message.text.split()
+    if len(parts) < 4:
+        bot.reply_to(message, "❌ Используйте: `/vadd_card 90 Сид 100`\n(рейтинг, название, цена)", parse_mode="Markdown")
         return
     
     try:
         rating = int(parts[1])
-        if rating < 1 or rating > 100:
-            bot.reply_to(message, "❌ Рейтинг от 1 до 100")
-            return
+        price = int(parts[-1])
+        name = " ".join(parts[2:-1])
     except:
-        bot.reply_to(message, "❌ Рейтинг должен быть числом")
+        bot.reply_to(message, "❌ Рейтинг и цена должны быть числами.")
         return
     
-    name = parts[2].strip('"').strip()
+    if rating < 1 or rating > 100:
+        bot.reply_to(message, "❌ Рейтинг от 1 до 100")
+        return
+    if price < 1:
+        bot.reply_to(message, "❌ Цена > 0")
+        return
     
     data = load_json(ANICARD_FILE)
     gifts = data.get("gifts", [])
     
-    # Проверяем дубликат
     for g in gifts:
         if g["name"].lower() == name.lower():
             bot.reply_to(message, f"⚠️ Карта с таким названием уже есть.")
             return
     
-    gifts.append({"rating": rating, "name": name})
-    gifts.sort(key=lambda x: x["rating"], reverse=True)
+    gifts.append({"rating": rating, "name": name, "price": price})
+    gifts.sort(key=lambda x: x["price"], reverse=True)
     data["gifts"] = gifts
     save_json(ANICARD_FILE, data)
     
     emoji = get_gift_emoji(rating)
-    bot.reply_to(message, f"✅ Добавлено: {emoji} {rating} — {name}")
+    bot.reply_to(message, f"✅ Добавлено: {emoji} {rating} — {name} — {price} 🪙")
 
-@bot.message_handler(commands=['vadd_card_remove'])
-def vadd_card_remove(message):
+@bot.message_handler(commands=['vremove_card'])
+def vremove_card(message):
     if not is_owner_or_admin(message):
         bot.reply_to(message, "⛔ Доступ только у админов.")
         return
     
     parts = message.text.split()
     if len(parts) < 2:
-        bot.reply_to(message, "❌ `/vadd_card_remove 92`", parse_mode="Markdown")
+        bot.reply_to(message, "❌ `/vremove_card 90` (рейтинг)", parse_mode="Markdown")
         return
     
     try:
@@ -695,81 +690,6 @@ def vadd_card_remove(message):
     save_json(ANICARD_FILE, data)
     bot.reply_to(message, f"✅ Карта с рейтингом {rating} удалена.")
 
-@bot.message_handler(commands=['vadd_stars'])
-def vadd_stars(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "⛔ Только владелец.")
-        return
-    
-    parts = message.text.split()
-    if len(parts) < 3:
-        bot.reply_to(message, "❌ Используйте: `/vadd_stars 1 100` (место и звёзды)", parse_mode="Markdown")
-        return
-    
-    try:
-        place = int(parts[1])
-        stars = int(parts[2])
-    except:
-        bot.reply_to(message, "❌ Введите числа")
-        return
-    
-    if place < 1:
-        bot.reply_to(message, "❌ Место >= 1")
-        return
-    if stars < 15:
-        bot.reply_to(message, "❌ Минимум 15 звёзд")
-        return
-    
-    data = load_json(STARS_FILE)
-    gifts = data.get("gifts", [])
-    
-    # Обновляем или добавляем
-    found = False
-    for g in gifts:
-        if g["place"] == place:
-            g["stars"] = stars
-            found = True
-            break
-    
-    if not found:
-        gifts.append({"place": place, "stars": stars})
-    
-    gifts.sort(key=lambda x: x["stars"], reverse=True)
-    data["gifts"] = gifts
-    save_json(STARS_FILE, data)
-    
-    bot.reply_to(message, f"✅ Место {place} → {stars} ⭐")
-
-@bot.message_handler(commands=['vadd_stars_remove'])
-def vadd_stars_remove(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "⛔ Только владелец.")
-        return
-    
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.reply_to(message, "❌ `/vadd_stars_remove 1`", parse_mode="Markdown")
-        return
-    
-    try:
-        place = int(parts[1])
-    except:
-        bot.reply_to(message, "❌ Введите число")
-        return
-    
-    data = load_json(STARS_FILE)
-    gifts = data.get("gifts", [])
-    
-    found = False
-    new_gifts = [g for g in gifts if g["place"] != place]
-    if len(new_gifts) == len(gifts):
-        bot.reply_to(message, f"⚠️ Место {place} не найдено.")
-        return
-    
-    data["gifts"] = new_gifts
-    save_json(STARS_FILE, data)
-    bot.reply_to(message, f"✅ Место {place} удалено.")
-
 @bot.message_handler(commands=['vanicard'])
 def vanicard(message):
     data = load_json(ANICARD_FILE)
@@ -780,29 +700,32 @@ def vanicard(message):
         return
     
     text = "🎁 *ПОДАРКИ ANICARD*\n\n"
-    text += "🟣 миф (98-100)\n🔵 лега (87-90)\n🟢 эпик (79-80)\n\n"
     text += "━━━━━━━━━━━━━━━━━━━━\n\n"
     
     for g in gifts:
         emoji = get_gift_emoji(g["rating"])
-        text += f"{emoji} *{g['rating']}* — {g['name']}\n"
+        text += f"{emoji} *{g['rating']}* — {g['name']} — {g['price']} 🪙\n"
     
     bot.reply_to(message, text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['vstars'])
 def vstars(message):
-    data = load_json(STARS_FILE)
+    data = load_json(ANICARD_FILE)
     gifts = data.get("gifts", [])
     
-    if not gifts:
-        bot.reply_to(message, "📭 *Список Telegram-звёзд пуст*", parse_mode="Markdown")
+    # Фильтруем: только карты с ценой >= 15, сортируем по цене (убывание)
+    filtered = [g for g in gifts if g.get("price", 0) >= 15]
+    filtered.sort(key=lambda x: x["price"], reverse=True)
+    
+    if not filtered:
+        bot.reply_to(message, "📭 *Список Telegram-звёзд пуст*\n(карт с ценой ≥ 15 нет)", parse_mode="Markdown")
         return
     
     text = "⭐ *ПОДАРКИ TELEGRAM (звёзды)*\n\n"
     text += "━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    for g in gifts:
-        text += f"🏆 Место {g['place']} → ⭐ {g['stars']} звёзд\n"
+    for i, g in enumerate(filtered, 1):
+        text += f"🏆 Место {i} → ⭐ {g['price']} звёзд ({g['name']})\n"
     
     bot.reply_to(message, text, parse_mode="Markdown")
 
