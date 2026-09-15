@@ -80,22 +80,49 @@ def add_limit(username):
     
     save_json(LIMITS_FILE, limits)
 
-# ===== РАБОТА С АДМИНАМИ =====
+# ============================================================
+# РАБОТА С АДМИНАМИ (ЧЕРЕЗ USERNAME)
+# ============================================================
+
+OWNER_USERNAME = "Zhongli_3112"  # твой username без @
+
 def load_admins():
-    return load_json(ADMINS_FILE, "admins")
+    """Загружает список username'ов админов"""
+    try:
+        with open(ADMINS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            admins = data.get("admins", [])
+            print(f"📖 load_admins: {admins}")
+            return admins
+    except Exception as e:
+        print(f"❌ load_admins error: {e}")
+        return []
 
 def save_admins(admins):
-    save_json(ADMINS_FILE, {"admins": admins})
+    """Сохраняет список username'ов админов"""
+    with open(ADMINS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"admins": admins}, f, indent=2, ensure_ascii=False)
+    print(f"💾 save_admins: {admins}")
 
-def is_owner(user_id):
-    return user_id == OWNER_ID
+def is_owner_username(username):
+    """Проверяет, является ли username владельцем"""
+    if not username:
+        return False
+    return username.lower() == OWNER_USERNAME.lower()
 
-def is_admin(user_id):
-    return user_id in load_admins()
+def is_admin_username(username):
+    """Проверяет, является ли username админом"""
+    if not username:
+        return False
+    if is_owner_username(username):
+        return True
+    admins = load_admins()
+    return username.lower() in [a.lower() for a in admins]
 
 def is_owner_or_admin(message):
-    uid = message.from_user.id
-    return is_owner(uid) or is_admin(uid)
+    """Проверяет по сообщению"""
+    username = message.from_user.username
+    return is_owner_username(username) or is_admin_username(username)
 
 # ===== РАБОТА С КЛИЧКАМИ =====
 def load_nicks():
@@ -156,6 +183,7 @@ def vhelp(message):
         "*Для всех:*\n"
         "`/vstart` — меню\n"
         "`/vtop` — таблица\n"
+        "`/vadmins_list` — список админов\n"
         "`/vgifts` — подарки\n\n"
         "*Для админов:*\n"
         "`/vadd @user [N]` — баллы\n"
@@ -169,12 +197,9 @@ def vhelp(message):
         "`/vadd_card 90 Сид 100` — добавить карту\n"
         "`/vremove_card 90` — удалить карту\n\n"
         "*Только для владельца:*\n"
-        "`/vadd_admin_id 123456789` — админ по ID\n"
-        "`/vadd_admin @user` — админ по @\n"
-        "`/vremove_admin_id 123456789` — убрать\n"
-        "`/vremove_admin @user` — убрать\n"
-        "`/vadmins_list` — список\n"
-        "`/vreset` — сброс",
+        "`/vadd_admin @user` — добавить админа\n"
+        "`/vremove_admin @user` — удалить админа\n"
+        "`/vreset` — сброс\n\n",
         parse_mode="Markdown"
     )
 
@@ -469,130 +494,83 @@ def vquestions_set(message):
     bot.reply_to(message, f"✅ Установлено: *{n}*", parse_mode="Markdown")
 
 # ============================================================
-# АДМИНЫ
+# КОМАНДЫ АДМИНОВ
 # ============================================================
 
-@bot.message_handler(commands=['vadd_admin_id'])
-def vadd_admin_id(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "⛔ Только владелец.")
-        return
-    
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.reply_to(message, "❌ `/vadd_admin_id 123456789`", parse_mode="Markdown")
-        return
-    
-    try:
-        uid = int(parts[1])
-        if uid == OWNER_ID:
-            bot.reply_to(message, "👑 Владелец уже админ.")
-            return
-        admins = load_admins()
-        if uid in admins:
-            bot.reply_to(message, f"⚠️ ID {uid} уже админ.")
-            return
-        admins.append(uid)
-        save_admins(admins)
-        bot.reply_to(message, f"✅ ID `{uid}` добавлен как админ!", parse_mode="Markdown")
-    except:
-        bot.reply_to(message, "❌ Введите корректный ID")
-
-@bot.message_handler(commands=['vremove_admin_id'])
-def vremove_admin_id(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "⛔ Только владелец.")
-        return
-    
-    parts = message.text.split()
-    if len(parts) < 2:
-        bot.reply_to(message, "❌ `/vremove_admin_id 123456789`", parse_mode="Markdown")
-        return
-    
-    try:
-        uid = int(parts[1])
-        admins = load_admins()
-        if uid not in admins:
-            bot.reply_to(message, f"⚠️ ID {uid} не админ.")
-            return
-        admins.remove(uid)
-        save_admins(admins)
-        bot.reply_to(message, f"✅ ID `{uid}` удалён.", parse_mode="Markdown")
-    except:
-        bot.reply_to(message, "❌ Введите корректный ID")
-
+# ===== ДОБАВИТЬ ПО USERNAME =====
 @bot.message_handler(commands=['vadd_admin'])
 def vadd_admin(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "⛔ Только владелец.")
+    if not is_owner_username(message.from_user.username):
+        bot.reply_to(message, "⛔ Только владелец может добавлять админов.")
         return
     
     parts = message.text.split()
     if len(parts) < 2 or not parts[1].startswith('@'):
-        bot.reply_to(message, "❌ `/vadd_admin @username`", parse_mode="Markdown")
+        bot.reply_to(message, "❌ Используйте: `/vadd_admin @username`", parse_mode="Markdown")
         return
     
-    try:
-        user = bot.get_chat(parts[1])
-        uid = user.id
-        if uid == OWNER_ID:
-            bot.reply_to(message, "👑 Владелец уже админ.")
-            return
-        admins = load_admins()
-        if uid in admins:
-            bot.reply_to(message, f"⚠️ {parts[1]} уже админ.")
-            return
-        admins.append(uid)
-        save_admins(admins)
-        bot.reply_to(message, f"✅ {parts[1]} добавлен как админ!")
-    except:
-        bot.reply_to(message, "❌ Пользователь не найден. Попросите его написать боту.")
+    username = parts[1].lstrip('@')
+    admins = load_admins()
+    
+    if username.lower() in [a.lower() for a in admins]:
+        bot.reply_to(message, f"⚠️ @{username} уже админ.")
+        return
+    
+    admins.append(username)
+    save_admins(admins)
+    bot.reply_to(
+        message,
+        f"✅ {username} добавлен как админ!\n"
+        f"📊 Всего админов: {len(admins)}"
+    )
 
+# ===== УДАЛИТЬ ПО USERNAME =====
 @bot.message_handler(commands=['vremove_admin'])
 def vremove_admin(message):
-    if not is_owner(message.from_user.id):
-        bot.reply_to(message, "⛔ Только владелец.")
+    if not is_owner_username(message.from_user.username):
+        bot.reply_to(message, "⛔ Только владелец может удалять админов.")
         return
     
     parts = message.text.split()
     if len(parts) < 2 or not parts[1].startswith('@'):
-        bot.reply_to(message, "❌ `/vremove_admin @username`", parse_mode="Markdown")
+        bot.reply_to(message, "❌ Используйте: `/vremove_admin @username`", parse_mode="Markdown")
         return
     
-    try:
-        user = bot.get_chat(parts[1])
-        uid = user.id
-        admins = load_admins()
-        if uid not in admins:
-            bot.reply_to(message, f"⚠️ {parts[1]} не админ.")
-            return
-        admins.remove(uid)
-        save_admins(admins)
-        bot.reply_to(message, f"✅ {parts[1]} удалён.")
-    except:
-        bot.reply_to(message, "❌ Пользователь не найден.")
+    username = parts[1].lstrip('@')
+    admins = load_admins()
+    
+    found = None
+    for a in admins:
+        if a.lower() == username.lower():
+            found = a
+            break
+    
+    if not found:
+        bot.reply_to(message, f"⚠️ @{username} не найден в админах.")
+        return
+    
+    admins.remove(found)
+    save_admins(admins)
+    bot.reply_to(
+        message,
+        f"✅ {username} удалён из админов.\n"
+        f"📊 Всего админов: {len(admins)}"
+    )
 
+# ===== СПИСОК АДМИНОВ (ВИДЯТ ВСЕ) =====
 @bot.message_handler(commands=['vadmins_list'])
 def vadmins_list(message):
-    if not is_owner_or_admin(message):
-        bot.reply_to(message, "⛔ Доступ только у админов.")
-        return
-    
     admins = load_admins()
     text = "👥 *СПИСОК АДМИНОВ*\n\n"
-    text += f"👑 *Владелец:* `{OWNER_ID}`\n\n"
+    text += f"👑 *Владелец:* {OWNER_USERNAME}\n\n"
     
     if not admins:
-        text += "📭 Админов нет."
+        text += "📭 *Добавленных админов нет.*"
     else:
-        text += "🛡️ *Админы:*\n"
-        for i, uid in enumerate(admins, 1):
-            try:
-                user = bot.get_chat(uid)
-                name = user.username or user.first_name or f"ID:{uid}"
-                text += f"{i}. @{name}\n"
-            except:
-                text += f"{i}. `{uid}`\n"
+        text += f"🛡️ *Админы ({len(admins)}):*\n"
+        for i, username in enumerate(admins, 1):
+            # Просто выводим username как есть — подчёркивания сохранятся
+            text += f"{i}. {username}\n"
     
     bot.reply_to(message, text, parse_mode="Markdown")
 
@@ -749,7 +727,7 @@ def callback_gifts(call):
 # ===== /vreset =====
 @bot.message_handler(commands=['vreset'])
 def vreset(message):
-    if not is_owner(message.from_user.id):
+    if not is_owner_username(message.from_user.username):
         bot.reply_to(message, "⛔ Только владелец.")
         return
     
@@ -783,6 +761,6 @@ def handle_buttons(message):
 # ============================================================
 
 print("✅ Викторина-бот запущен!")
-print(f"👑 Владелец: {OWNER_ID}")
+print(f"👑 Владелец: @{OWNER_USERNAME}")
 print("=" * 40)
 bot.infinity_polling()
