@@ -13,7 +13,12 @@ QUESTIONS_FILE = "questions_count.json"
 ADMINS_FILE = "admins.json"
 NICKS_FILE = "nicks.json"
 LIMITS_FILE = "daily_limits.json"
+DOB_LIMITS_FILE = "dob_limits.json"  # НОВЫЙ ФАЙЛ: доп. вопросы
 ANICARD_FILE = "anibattle_gifts.json"
+BANS_FILE = "bans.json"
+USERNAMES_FILE = "usernames_cache.json"
+DOB_HISTORY_FILE = "dob_history.json"
+DELETED_FILE = "deleted_users.json"
 # =====================
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -26,7 +31,12 @@ def ensure_files_exist():
         (QUESTIONS_FILE, {"count": 0}),
         (NICKS_FILE, {}),
         (LIMITS_FILE, {}),
+        (DOB_LIMITS_FILE, {}),  # НОВЫЙ ФАЙЛ
         (ANICARD_FILE, {"gifts": []}),
+        (BANS_FILE, {"banned": []}),
+        (USERNAMES_FILE, {}),
+        (DOB_HISTORY_FILE, {}),
+        (DELETED_FILE, {}),
     ]:
         if not os.path.exists(f):
             with open(f, "w", encoding="utf-8") as file:
@@ -54,15 +64,13 @@ def get_msk_date():
     msk = timezone(timedelta(hours=3))
     return datetime.now(msk).strftime("%Y-%m-%d")
 
-# ===== ЛИМИТЫ =====
+# ===== ЛИМИТЫ (5 ответов в день) =====
 def check_limit(username):
     clean = username.lower().replace('@', '')
     today = get_msk_date()
     limits = load_json(LIMITS_FILE)
-    
     if clean not in limits or limits[clean].get("date") != today:
         return True, 5
-    
     count = limits[clean].get("count", 0)
     if count >= 5:
         return False, 0
@@ -72,46 +80,230 @@ def add_limit(username):
     clean = username.lower().replace('@', '')
     today = get_msk_date()
     limits = load_json(LIMITS_FILE)
-    
     if clean not in limits or limits[clean].get("date") != today:
         limits[clean] = {"date": today, "count": 1}
     else:
         limits[clean]["count"] += 1
-    
     save_json(LIMITS_FILE, limits)
 
-# ============================================================
-# РАБОТА С АДМИНАМИ (ЧЕРЕЗ USERNAME)
-# ============================================================
+def reset_limit(username):
+    clean = username.lower().replace('@', '')
+    limits = load_json(LIMITS_FILE)
+    if clean in limits:
+        del limits[clean]
+        save_json(LIMITS_FILE, limits)
 
-OWNER_USERNAME = "Zhongli_3112"  # твой username без @
+# ===== ДОПОЛНИТЕЛЬНЫЕ ЛИМИТЫ (общие на день) =====
+def check_dob_limit(kind):
+    """
+    kind = 1 или 2.
+    Возвращает (можно_ли, осталось).
+    """
+    today = get_msk_date()
+    limits = load_json(DOB_LIMITS_FILE)
+    max_count = 8 if kind == 1 else 2
+    
+    today_data = limits.get(today, {})
+    count = today_data.get(f"vdob{kind}", 0)
+    
+    if count >= max_count:
+        return False, 0
+    return True, max_count - count
+
+def add_dob_limit(kind):
+    today = get_msk_date()
+    limits = load_json(DOB_LIMITS_FILE)
+    
+    if today not in limits:
+        limits[today] = {"vdob1": 0, "vdob2": 0}
+    
+    key = f"vdob{kind}"
+    limits[today][key] = limits[today].get(key, 0) + 1
+    save_json(DOB_LIMITS_FILE, limits)
+
+def remove_dob_limit(kind):
+    """Уменьшает счётчик на 1 (при откате)."""
+    today = get_msk_date()
+    limits = load_json(DOB_LIMITS_FILE)
+    
+    if today not in limits:
+        return
+    
+    key = f"vdob{kind}"
+    if key in limits[today] and limits[today][key] > 0:
+        limits[today][key] -= 1
+        save_json(DOB_LIMITS_FILE, limits)
+
+def reset_dob_limit():
+    """Сбрасывает все счётчики доп. вопросов за сегодня."""
+    today = get_msk_date()
+    limits = load_json(DOB_LIMITS_FILE)
+    if today in limits:
+        del limits[today]
+        save_json(DOB_LIMITS_FILE, limits)
+
+# ===== ИСТОРИЯ ДОП. ВОПРОСОВ (для отката) =====
+def add_dob_history(username, kind, points):
+    today = get_msk_date()
+    history = load_json(DOB_HISTORY_FILE)
+    
+    if today not in history:
+        history[today] = []
+    
+    now = datetime.now(timezone(timedelta(hours=3))).strftime("%H:%M:%S")
+    history[today].append({
+        "user": username.lower().replace('@', ''),
+        "kind": kind,
+        "points": points,
+        "time": now
+    })
+    save_json(DOB_HISTORY_FILE, history)
+
+def get_last_dob_for_user(username, kind=None):
+    """
+    Возвращает последнее начисление для пользователя.
+    Если kind задан (1 или 2), ищет только этого типа.
+    Возвращает индекс в списке или None.
+    """
+    today = get_msk_date()
+    history = load_json(DOB_HISTORY_FILE)
+    clean = username.lower().replace('@', '')
+    
+    if today not in history:
+        return None
+    
+    entries = history[today]
+    for i in range(len(entries) - 1, -1, -1):
+        e = entries[i]
+        if e["user"] == clean:
+            if kind is None or e["kind"] == kind:
+                return i
+    return None
+
+def pop_dob_history(index):
+    """Удаляет запись из истории по индексу и возвращает её."""
+    today = get_msk_date()
+    history = load_json(DOB_HISTORY_FILE)
+    
+    if today not in history:
+        return None
+    
+    entries = history[today]
+    if index < 0 or index >= len(entries):
+        return None
+    
+    entry = entries.pop(index)
+    history[today] = entries
+    save_json(DOB_HISTORY_FILE, history)
+    return entry
+
+def reset_dob_history():
+    today = get_msk_date()
+    history = load_json(DOB_HISTORY_FILE)
+    if today in history:
+        del history[today]
+        save_json(DOB_HISTORY_FILE, history)
+# ===== БАНЫ =====
+def is_banned(username):
+    clean = username.lower().replace('@', '')
+    bans = load_json(BANS_FILE).get("banned", [])
+    return clean in [b.lower() for b in bans]
+
+def ban_user(username):
+    clean = username.lower().replace('@', '')
+    bans = load_json(BANS_FILE)
+    if clean not in [b.lower() for b in bans.get("banned", [])]:
+        bans.setdefault("banned", []).append(clean)
+        save_json(BANS_FILE, bans)
+
+def unban_user(username):
+    clean = username.lower().replace('@', '')
+    bans = load_json(BANS_FILE)
+    banned = bans.get("banned", [])
+    new_banned = [b for b in banned if b.lower() != clean]
+    bans["banned"] = new_banned
+    save_json(BANS_FILE, bans)
+
+# ===== КЭШ USERNAME -> ID =====
+def load_usernames_cache():
+    return load_json(USERNAMES_FILE)
+
+def save_usernames_cache(cache):
+    save_json(USERNAMES_FILE, cache)
+
+def remember_user(user):
+    if user.username:
+        cache = load_usernames_cache()
+        cache[user.username.lower()] = user.id
+        save_usernames_cache(cache)
+
+def get_user_id_by_username(username):
+    cache = load_usernames_cache()
+    return cache.get(username.lower())
+
+def forget_user(username):
+    """Удаляет пользователя из кэша username -> ID."""
+    clean = username.lower().replace('@', '')
+    cache = load_usernames_cache()
+    if clean in cache:
+        del cache[clean]
+        save_usernames_cache(cache)
+
+# ===== СПИСОК УДАЛЁННЫХ (защита от воскрешения) =====
+def load_deleted():
+    return load_json(DELETED_FILE)
+
+def save_deleted(data):
+    save_json(DELETED_FILE, data)
+
+def mark_deleted(username, user_id=None):
+    clean = username.lower().replace('@', '')
+    data = load_deleted()
+    data[clean] = True
+    if user_id is not None:
+        data[f"id_{user_id}"] = True
+    save_deleted(data)
+
+def is_deleted(username, user_id=None):
+    clean = username.lower().replace('@', '')
+    data = load_deleted()
+    if clean in data:
+        return True
+    if user_id is not None and f"id_{user_id}" in data:
+        return True
+    return False
+
+def unmark_deleted(username, user_id=None):
+    clean = username.lower().replace('@', '')
+    data = load_deleted()
+    if clean in data:
+        del data[clean]
+    if user_id is not None and f"id_{user_id}" in data:
+        del data[f"id_{user_id}"]
+    save_deleted(data)
+        
+# ===== АДМИНЫ =====
+OWNER_USERNAME = "Zhongli_3112"
 
 def load_admins():
-    """Загружает список username'ов админов"""
     try:
         with open(ADMINS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            admins = data.get("admins", [])
-            print(f"📖 load_admins: {admins}")
-            return admins
+            return data.get("admins", [])
     except Exception as e:
         print(f"❌ load_admins error: {e}")
         return []
 
 def save_admins(admins):
-    """Сохраняет список username'ов админов"""
     with open(ADMINS_FILE, "w", encoding="utf-8") as f:
         json.dump({"admins": admins}, f, indent=2, ensure_ascii=False)
-    print(f"💾 save_admins: {admins}")
 
 def is_owner_username(username):
-    """Проверяет, является ли username владельцем"""
     if not username:
         return False
     return username.lower() == OWNER_USERNAME.lower()
 
 def is_admin_username(username):
-    """Проверяет, является ли username админом"""
     if not username:
         return False
     if is_owner_username(username):
@@ -120,11 +312,10 @@ def is_admin_username(username):
     return username.lower() in [a.lower() for a in admins]
 
 def is_owner_or_admin(message):
-    """Проверяет по сообщению"""
     username = message.from_user.username
     return is_owner_username(username) or is_admin_username(username)
 
-# ===== РАБОТА С КЛИЧКАМИ =====
+# ===== КЛИЧКИ =====
 def load_nicks():
     return load_json(NICKS_FILE)
 
@@ -146,6 +337,54 @@ def save_scores(scores):
 scores = load_scores()
 
 # ============================================================
+# ОПРЕДЕЛЕНИЕ ЦЕЛИ
+# ============================================================
+
+def get_bot_username():
+    try:
+        return bot.get_me().username.lower()
+    except:
+        return "aniark_viktorins_bot"
+
+def extract_points(message):
+    """Ищет число в тексте команды. По умолчанию 1."""
+    parts = message.text.split()
+    for part in parts:
+        if part.isdigit():
+            return int(part)
+    return 1
+    
+def get_target_user(message):
+    """
+    Возвращает (user_id, user_name, username, from_reply):
+    - user_id: int или None
+    - user_name: str
+    - username: str (без @)
+    - from_reply: True если это свайп, False если @username
+    """
+    text_parts = message.text.split()
+    bot_username = get_bot_username()
+
+    # 1. @username в тексте
+    for part in text_parts:
+        if part.startswith('@') and len(part) > 1:
+            username = part[1:].lower()
+            if username == bot_username:
+                continue
+            user_id = get_user_id_by_username(username)
+            name = get_display_name(username)
+            return user_id, name, username, False
+
+    # 2. Свайп
+    if message.reply_to_message:
+        user = message.reply_to_message.from_user
+        username = (user.username or f"user_{user.id}").lower()
+        name = get_display_name(username)
+        return user.id, name, username, True
+
+    return None, None, None, False
+
+# ============================================================
 # КОМАНДЫ
 # ============================================================
 
@@ -155,7 +394,7 @@ def vstart(message):
     markup.add(
         types.KeyboardButton("🏆 Таблица"),
         types.KeyboardButton("🎁 Подарки"),
-        types.KeyboardButton("👥 Админы"),
+        types.KeyboardButton("🧑‍💻💼 Админы"),
         types.KeyboardButton("📖 Помощь")
     )
     bot.reply_to(
@@ -169,7 +408,9 @@ def vstart(message):
         "Для админов:\n"
         "`/vadd @user` — начислить балл\n"
         "`/vadd @user 3` — начислить 3 балла\n"
-        "`/vnick @user Кличка` — дать кличку\n\n"
+        "`/vnick @user Кличка` — дать кличку\n"
+        "`/vdob1 @user` — доп. вопрос (+1 балл, 8/день)\n"
+        "`/vdob2 @user` — доп. вопрос (+2 балла, 2/день)\n\n"
         "💡 Лимит: *5 ответов в день* на человека (МСК)",
         parse_mode="Markdown",
         reply_markup=markup
@@ -184,16 +425,24 @@ def vhelp(message):
         "`/vstart` — меню\n"
         "`/vtop` — таблица\n"
         "`/vadmins_list` — список админов\n"
-        "`/vgifts` — подарки\n\n"
+        "`/vgifts` — подарки\n"
+        "`/vanicard` — список AniCard\n"
+        "`/vstars` — список Telegram-звёзд\n\n"
         "*Для админов:*\n"
-        "`/vadd @user [N]` — баллы\n"
+        "`/vadd @user [N]` — баллы (лимит 5/день)\n"
+        "`/vdob1 @user` — доп. +1 балл (лимит 8/день)\n"
+        "`/vdob2 @user` — доп. +2 балла (лимит 2/день)\n"
         "`/vremove @user [N]` — отнять\n"
         "`/vdelete @user` — удалить\n"
+        "`/vrestore @user` — восстановить удалённого\n"
         "`/vnick @user Кличка` — кличка\n"
         "`/vnick_remove @user` — убрать кличку\n"
-        "`/vquestion` — +1 вопрос\n"
-        "`/vquestions_remove N` — убрать N\n"
-        "`/vquestions_set N` — установить\n"
+        "`/vban @user` — забанить\n"
+        "`/vunban @user` — разбанить\n"
+        "`/vquestions_add N` — добавить N вопросов\n"
+        "`/vquestions_remove N` — убрать N вопросов\n"
+        "`/vquestions_set N` — установить количество вопросов\n"
+        "`/vdob_rollback @user [1|2]` — откатить доп. вопрос\n"
         "`/vadd_card 90 Сид 100` — добавить карту\n"
         "`/vremove_card 90` — удалить карту\n\n"
         "*Только для владельца:*\n"
@@ -206,20 +455,37 @@ def vhelp(message):
 # ===== /vtop =====
 @bot.message_handler(commands=['vtop'])
 def vtop(message):
-    filtered = {k: v for k, v in scores.items() if v > 0}
-    if not filtered:
-        bot.reply_to(message, "📭 *Таблица пуста*", parse_mode="Markdown")
+    scores = load_scores()
+    nicks = load_nicks()
+    deleted = load_deleted()
+    
+    if not scores:
+        bot.reply_to(message, "📭 Таблица лидеров пуста.")
         return
     
-    sorted_users = sorted(filtered.items(), key=lambda x: x[1], reverse=True)
+    # Фильтруем удалённых
+    filtered_scores = {}
+    for username, score in scores.items():
+        # Пропускаем, если username в списке удалённых
+        if username in deleted:
+            continue
+        # Пропускаем, если для этого username есть id_* в удалённых
+        # (необязательно, но полезно)
+        filtered_scores[username] = score
+    
+    if not filtered_scores:
+        bot.reply_to(message, "📭 Таблица лидеров пуста.")
+        return
+    
+    sorted_scores = sorted(filtered_scores.items(), key=lambda x: x[1], reverse=True)
     questions = load_json(QUESTIONS_FILE).get("count", 0)
     
-    text = "🏆 *ТАБЛИЦА ЛИДЕРОВ*\n"
+    text = "🏆 ТАБЛИЦА ЛИДЕРОВ\n"
     text += f"❓ Вопросов: {questions}\n"
-    text += f"👥 Участников: {len(filtered)}\n\n"
+    text += f"👥 Участников: {len(filtered_scores)}\n\n"
     
-    for i, (user, score) in enumerate(sorted_users, 1):
-        name = get_display_name(user)
+    for i, (username, score) in enumerate(sorted_scores[:20], 1):
+        display_name = nicks.get(username, username)
         if i == 1:
             medal = "🥇"
         elif i == 2:
@@ -228,70 +494,298 @@ def vtop(message):
             medal = "🥉"
         else:
             medal = f"{i}."
-        text += f"{medal} {name} — {score}\n"
+        text += f"{medal} {display_name} — {score}\n"
     
-    bot.reply_to(message, text, parse_mode="Markdown")
+    bot.reply_to(message, text)
 
-# ===== /vadd =====
-@bot.message_handler(commands=['vadd'])
+# ===== /vadd (С ЛИМИТОМ 5) =====
+@bot.message_handler(commands=['vadd', 'add'])
 def vadd(message):
     if not is_owner_or_admin(message):
         bot.reply_to(message, "⛔ Доступ только у админов.")
         return
-    
+
     parts = message.text.split()
-    username = None
-    points = 1
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    message.text = ' '.join(parts)
     
-    for part in parts:
-        if part.startswith('@') and len(part) > 1:
-            username = part.lower()
-            break
-    
-    if not username and message.reply_to_message:
-        user = message.reply_to_message.from_user
-        if user.username:
-            username = "@" + user.username.lower()
-        else:
-            username = user.first_name or f"user_{user.id}"
-    
-    if not username:
-        bot.reply_to(message, "❌ Укажите @username или ответьте на сообщение.")
+    target_id, user_name, username, from_reply = get_target_user(message)
+
+    if username is None:
+        bot.reply_to(message, "❌ Укажите @username (не бота) или ответьте (свайпните) на сообщение участника.")
         return
+
+    if target_id is not None and target_id == message.from_user.id:
+        bot.reply_to(message, "❌ Вы не можете начислять баллы самому себе.")
+        return
+
+    clean_key = username.lower().replace('@', '')
     
-    for part in parts:
-        try:
-            num = int(part)
-            if num > 0:
-                points = num
-                break
-        except ValueError:
-            continue
-    
-    clean = username.replace('@', '').lower()
-    
-    can, remaining = check_limit(clean)
-    if not can:
+    # === ЗАЩИТА ОТ ВОСКРЕШЕНИЯ ===
+    if is_deleted(clean_key, target_id):
         bot.reply_to(
             message,
-            f"❌ *{username}* уже ответил на 5 вопросов сегодня.\n"
-            f"Лимит обновится в 00:00 (МСК).",
-            parse_mode="Markdown"
+            f"❌ Пользователь @{username} был удалён из таблицы.\n"
+            f"Чтобы вернуть его — используйте `/vrestore @{username}`."
         )
         return
-    
-    scores[clean] = scores.get(clean, 0) + points
+    if not from_reply and clean_key not in scores:
+        bot.reply_to(
+            message,
+            f"❌ Пользователь @{username} не найден в таблице.\n"
+            f"Свайпните его сообщение (ответьте) и напишите `/vadd` — тогда он добавится."
+        )
+        return
+    # ==============================
+
+    if is_banned(clean_key):
+        bot.reply_to(message, f"❌ @{username} забанен и не может получать баллы.")
+        return
+
+    can_add, remaining = check_limit(clean_key)
+    if not can_add:
+        bot.reply_to(
+            message,
+            f"❌ {user_name} уже ответил на 5 вопросов сегодня.\n"
+            f"Лимит обновится в 00:00 (МСК)."
+        )
+        return
+
+    points = extract_points(message)
+
+    if clean_key not in scores:
+        scores[clean_key] = 0
+
+    scores[clean_key] += points
     save_scores(scores)
-    add_limit(clean)
-    
-    can2, remaining2 = check_limit(clean)
-    word = "балл" if points == 1 else "балла" if points in [2,3,4] else "баллов"
-    name = get_display_name(clean)
+
+    add_limit(clean_key)
+
+    _, remaining_after = check_limit(clean_key)
+
+    warning = ""
+    if target_id is None:
+        warning = "\n⚠️ ID ещё не известен. Как только человек напишет в чат — привяжется автоматически."
+
     bot.reply_to(
         message,
-        f"✅ {name} +{points} {word}! Всего: {scores[clean]}\n"
-        f"📊 Осталось ответов сегодня: {remaining2}/5",
-        parse_mode="Markdown"
+        f"✅ {user_name} +{points} балл(ов)! Всего: {scores[clean_key]}\n"
+        f"📊 Осталось ответов сегодня: {remaining_after}/5{warning}"
+    )
+
+# ===== /vdob1 (+1 БАЛЛ, 8 РАЗ В ДЕНЬ — ОБЩИЙ ЛИМИТ) =====
+@bot.message_handler(commands=['vdob1'])
+def vdob1(message):
+    if not is_owner_or_admin(message):
+        bot.reply_to(message, "⛔ Доступ только у админов.")
+        return
+
+    parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    message.text = ' '.join(parts)
+
+    target_id, user_name, username, from_reply = get_target_user(message)
+
+    if username is None:
+        bot.reply_to(message, "❌ Укажите @username (не бота) или ответьте (свайпните) на сообщение участника.")
+        return
+
+    if target_id is not None and target_id == message.from_user.id:
+        bot.reply_to(message, "❌ Вы не можете начислять баллы самому себе.")
+        return
+
+    clean_key = username.lower().replace('@', '')
+    
+    # === ЗАЩИТА ОТ ВОСКРЕШЕНИЯ ===
+    if is_deleted(clean_key, target_id):
+        bot.reply_to(
+            message,
+            f"❌ Пользователь @{username} был удалён из таблицы.\n"
+            f"Чтобы вернуть его — используйте `/vrestore @{username}`."
+        )
+        return
+    if not from_reply and clean_key not in scores:
+        bot.reply_to(
+            message,
+            f"❌ Пользователь @{username} не найден в таблице.\n"
+            f"Свайпните его сообщение (ответьте) и напишите `/vdob1` — тогда он добавится."
+        )
+        return
+    # ==============================
+
+    if is_banned(clean_key):
+        bot.reply_to(message, f"❌ @{username} забанен и не может получать баллы.")
+        return
+
+    # === ПРОВЕРКА ОБЩЕГО ЛИМИТА ===
+    can_add, remaining = check_dob_limit(1)
+    if not can_add:
+        bot.reply_to(
+            message,
+            f"❌ Дополнительные вопросы (+1 балл) на сегодня исчерпаны (8/8).\n"
+            f"Лимит обновится в 00:00 (МСК)."
+        )
+        return
+    # ================================
+
+    if clean_key not in scores:
+        scores[clean_key] = 0
+
+    scores[clean_key] += 1
+    save_scores(scores)
+
+    add_dob_limit(1)
+    add_dob_history(clean_key, 1, 1)
+
+    _, remaining_after = check_dob_limit(1)
+
+    bot.reply_to(
+        message,
+        f"✅ {user_name} +1 балл (доп. вопрос)!\n"
+        f"Всего: {scores[clean_key]}\n"
+        f"📊 Осталось доп. вопросов (+1) на сегодня: {remaining_after}/8"
+    )
+
+# ===== /vdob2 (+2 БАЛЛА, 2 РАЗА В ДЕНЬ — ОБЩИЙ ЛИМИТ) =====
+@bot.message_handler(commands=['vdob2'])
+def vdob2(message):
+    if not is_owner_or_admin(message):
+        bot.reply_to(message, "⛔ Доступ только у админов.")
+        return
+
+    parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    message.text = ' '.join(parts)
+
+    target_id, user_name, username, from_reply = get_target_user(message)
+
+    if username is None:
+        bot.reply_to(message, "❌ Укажите @username (не бота) или ответьте (свайпните) на сообщение участника.")
+        return
+
+    if target_id is not None and target_id == message.from_user.id:
+        bot.reply_to(message, "❌ Вы не можете начислять баллы самому себе.")
+        return
+
+    clean_key = username.lower().replace('@', '')
+    
+    # === ЗАЩИТА ОТ ВОСКРЕШЕНИЯ ===
+    if is_deleted(clean_key, target_id):
+        bot.reply_to(
+            message,
+            f"❌ Пользователь @{username} был удалён из таблицы.\n"
+            f"Чтобы вернуть его — используйте `/vrestore @{username}`."
+        )
+        return
+    if not from_reply and clean_key not in scores:
+        bot.reply_to(
+            message,
+            f"❌ Пользователь @{username} не найден в таблице.\n"
+            f"Свайпните его сообщение (ответьте) и напишите `/vdob2` — тогда он добавится."
+        )
+        return
+    # ==============================
+
+    if is_banned(clean_key):
+        bot.reply_to(message, f"❌ @{username} забанен и не может получать баллы.")
+        return
+
+    # === ПРОВЕРКА ОБЩЕГО ЛИМИТА ===
+    can_add, remaining = check_dob_limit(2)
+    if not can_add:
+        bot.reply_to(
+            message,
+            f"❌ Дополнительные вопросы (+2 балла) на сегодня исчерпаны (2/2).\n"
+            f"Лимит обновится в 00:00 (МСК)."
+        )
+        return
+    # ================================
+
+    if clean_key not in scores:
+        scores[clean_key] = 0
+
+    scores[clean_key] += 2
+    save_scores(scores)
+
+    add_dob_limit(2)
+    add_dob_history(clean_key, 2, 2)
+
+    _, remaining_after = check_dob_limit(2)
+
+    bot.reply_to(
+        message,
+        f"✅ {user_name} +2 балла (доп. вопрос)!\n"
+        f"Всего: {scores[clean_key]}\n"
+        f"📊 Осталось доп. вопросов (+2) на сегодня: {remaining_after}/2"
+    )
+
+# ===== /vdob_rollback (ОТКАТ ДОП. ВОПРОСА) =====
+@bot.message_handler(commands=['vdob_rollback'])
+def vdob_rollback(message):
+    if not is_owner_or_admin(message):
+        bot.reply_to(message, "⛔ Доступ только у админов.")
+        return
+
+    parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    message.text = ' '.join(parts)
+
+    target_id, user_name, username, from_reply = get_target_user(message)
+
+    if username is None:
+        bot.reply_to(message, "❌ Укажите @username (не бота) или ответьте (свайпните) на сообщение участника.")
+        return
+
+    clean_key = username.lower().replace('@', '')
+
+    # Определяем, какой тип откатывать (если указан)
+    kind = None
+    parts = message.text.split()
+    for part in parts:
+        if part.isdigit():
+            k = int(part)
+            if k in (1, 2):
+                kind = k
+                break
+
+    # Ищем последнее начисление
+    idx = get_last_dob_for_user(clean_key, kind)
+    if idx is None:
+        bot.reply_to(
+            message,
+            f"❌ У @{username} нет начислений доп. вопросов" + 
+            (f" (тип +{kind})" if kind else "") + " за сегодня."
+        )
+        return
+
+    # Забираем запись из истории
+    entry = pop_dob_history(idx)
+    if entry is None:
+        bot.reply_to(message, "❌ Не удалось найти запись для отката.")
+        return
+
+    e_kind = entry["kind"]
+    e_points = entry["points"]
+
+    # Уменьшаем баллы у пользователя
+    if clean_key in scores:
+        scores[clean_key] = max(0, scores[clean_key] - e_points)
+        save_scores(scores)
+
+    # Возвращаем попытку в счётчик
+    remove_dob_limit(e_kind)
+
+    _, remaining = check_dob_limit(e_kind)
+
+    bot.reply_to(
+        message,
+        f"↩️ Откат выполнен!\n"
+        f"👤 {user_name} — снято {e_points} балл(ов)\n"
+        f"📊 Осталось доп. вопросов (+{e_kind}) на сегодня: {remaining}/{8 if e_kind == 1 else 2}"
     )
 
 # ===== /vremove =====
@@ -302,45 +796,35 @@ def vremove(message):
         return
     
     parts = message.text.split()
-    username = None
-    points = 1
-    
-    for part in parts:
-        if part.startswith('@') and len(part) > 1:
-            username = part.lower()
-            break
-    
-    if not username and message.reply_to_message:
-        user = message.reply_to_message.from_user
-        if user.username:
-            username = "@" + user.username.lower()
-        else:
-            username = user.first_name or f"user_{user.id}"
-    
-    if not username:
-        bot.reply_to(message, "❌ Укажите @username или ответьте на сообщение.")
-        return
-    
-    for part in parts:
-        try:
-            num = int(part)
-            if num > 0:
-                points = num
-                break
-        except ValueError:
-            continue
-    
-    clean = username.replace('@', '').lower()
-    if clean not in scores:
-        bot.reply_to(message, f"❌ У {username} нет баллов.")
-        return
-    
-    scores[clean] = max(0, scores[clean] - points)
-    save_scores(scores)
-    name = get_display_name(clean)
-    bot.reply_to(message, f"➖ {name} -{points} баллов. Осталось: {scores[clean]}")
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    message.text = ' '.join(parts)
 
-# ===== /vdelete =====
+    target_id, user_name, username, from_reply = get_target_user(message)
+    
+    if username is None:
+        bot.reply_to(message, "❌ Укажите @username (не бота) или ответьте (свайпните) на сообщение участника.")
+        return
+
+    if target_id is not None and target_id == message.from_user.id:
+        bot.reply_to(message, "❌ Вы не можете снимать баллы самому себе.")
+        return
+
+    points = extract_points(message)
+    clean = username.lower().replace('@', '')
+    scores_local = load_scores()
+    
+    if clean not in scores_local:
+        bot.reply_to(message, f"❌ У {user_name} нет баллов.")
+        return
+    
+    scores_local[clean] = max(0, scores_local[clean] - points)
+    save_scores(scores_local)
+    name = get_display_name(clean)
+    
+    bot.reply_to(message, f"➖ {name} -{points} баллов. Осталось: {scores_local[clean]}")
+
+# ===== /vdelete (ПОЛНАЯ ОЧИСТКА) =====
 @bot.message_handler(commands=['vdelete'])
 def vdelete(message):
     if not is_owner_or_admin(message):
@@ -348,64 +832,144 @@ def vdelete(message):
         return
     
     parts = message.text.split()
-    username = None
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    message.text = ' '.join(parts)
+
+    target_id, user_name, username, from_reply = get_target_user(message)
     
-    for part in parts:
-        if part.startswith('@') and len(part) > 1:
-            username = part.lower()
-            break
+    if username is None:
+        bot.reply_to(message, "❌ Укажите @username (не бота) или ответьте (свайпните) на сообщение участника.")
+        return
+
+    if target_id is not None and target_id == message.from_user.id:
+        bot.reply_to(message, "❌ Вы не можете удалить себя из таблицы.")
+        return
+
+    clean = username.lower().replace('@', '')
+    scores_local = load_scores()
     
-    if not username and message.reply_to_message:
-        user = message.reply_to_message.from_user
-        if user.username:
-            username = "@" + user.username.lower()
-        else:
-            username = user.first_name or f"user_{user.id}"
-    
-    if not username:
-        bot.reply_to(message, "❌ Укажите @username.")
+    if clean not in scores_local:
+        bot.reply_to(message, f"❌ Пользователь {user_name} не найден в таблице.")
         return
     
-    clean = username.replace('@', '').lower()
-    if clean not in scores:
-        bot.reply_to(message, f"❌ Пользователь не найден.")
-        return
+    # 1. Удаляем из баллов
+    del scores_local[clean]
+    save_scores(scores_local)
     
-    del scores[clean]
-    save_scores(scores)
-    
+    # 2. Удаляем кличку
     nicks = load_nicks()
     if clean in nicks:
         del nicks[clean]
         save_nicks(nicks)
     
-    bot.reply_to(message, f"🗑️ {username} удалён.")
+    # 3. Сбрасываем лимиты (основные и доп)
+    reset_limit(clean)
+    # НЕ трогаем общий счётчик, но убираем записи пользователя из истории
+    # (не критично, но чисто)
+    pass  # Счётчик доп. вопросов — общий, его не сбрасываем
+    
+    # 4. Убираем из банов (если был)
+    unban_user(clean)
+    
+    # 5. УДАЛЯЕМ ИЗ КЭША USERNAME -> ID (главное!)
+    forget_user(clean)
+    
+    # 5.1. Помечаем как удалённого (защита от воскрешения)
+    mark_deleted(clean, target_id)
+    
+    # 6. Очищаем историю доп. вопросов для пользователя
+    today = get_msk_date()
+    history = load_json(DOB_HISTORY_FILE)
+    if today in history:
+        history[today] = [e for e in history[today] if e["user"] != clean]
+        save_json(DOB_HISTORY_FILE, history)
+    
+    bot.reply_to(message, f"🗑️ {user_name} удалён из таблицы (полностью).")
 
+# ===== /vrestore (ВОССТАНОВИТЬ УДАЛЁННОГО) =====
+@bot.message_handler(commands=['vrestore'])
+def vrestore(message):
+    if not is_owner_or_admin(message):
+        bot.reply_to(message, "⛔ Доступ только у админов.")
+        return
+
+    parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    message.text = ' '.join(parts)
+
+    target_id, user_name, username, from_reply = get_target_user(message)
+
+    if username is None:
+        bot.reply_to(message, "❌ Укажите @username (не бота) или ответьте (свайпните) на сообщение участника.")
+        return
+
+    clean_key = username.lower().replace('@', '')
+
+    if not is_deleted(clean_key, target_id):
+        bot.reply_to(message, f"⚠️ Пользователь @{username} не находится в списке удалённых.")
+        return
+
+    unmark_deleted(clean_key, target_id)
+
+    bot.reply_to(
+        message,
+        f"✅ Пользователь @{username} восстановлен.\n"
+        f"Теперь можно начислять ему баллы через `/vadd` или `/vdob1` / `/vdob2`."
+    )
+    
 # ===== /vnick =====
 @bot.message_handler(commands=['vnick'])
 def vnick(message):
     if not is_owner_or_admin(message):
         bot.reply_to(message, "⛔ Доступ только у админов.")
         return
-    
+
     parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    message.text = ' '.join(parts)
+    parts = message.text.split()
+
     if len(parts) < 3:
-        bot.reply_to(message, "❌ Используйте: `/vnick @user Кличка`", parse_mode="Markdown")
+        bot.reply_to(message, "❌ Используйте: /vnick @user Кличка")
+        return
+
+    username = None
+    nick_start_index = None
+    bot_username = get_bot_username()
+    
+    for i, part in enumerate(parts[1:], 1):
+        if part.startswith('@') and len(part) > 1:
+            uname = part[1:].lower()
+            if uname == bot_username:
+                continue
+            username = uname
+            nick_start_index = i + 1
+            break
+    
+    if not username:
+        bot.reply_to(message, "❌ Укажите @username (не бота). Пример: /vnick @user Кличка")
         return
     
-    username = parts[1].lower()
-    if not username.startswith('@'):
-        bot.reply_to(message, "❌ Укажите @username")
+    if nick_start_index is None or nick_start_index >= len(parts):
+        bot.reply_to(message, "❌ Укажите кличку. Пример: /vnick @user Кличка")
         return
+
+    new_nick = ' '.join(parts[nick_start_index:])
+    clean_username = username.replace('@', '').lower()
     
-    clean = username.replace('@', '')
-    new_nick = " ".join(parts[2:])
-    
+    scores_local = load_scores()
+    if clean_username not in scores_local:
+        bot.reply_to(message, f"❌ Пользователь @{username} не найден в таблице. Сначала начислите ему баллы.")
+        return
+
     nicks = load_nicks()
-    nicks[clean] = new_nick
+    nicks[clean_username] = new_nick
     save_nicks(nicks)
     
-    bot.reply_to(message, f"✅ {username} → *{new_nick}*", parse_mode="Markdown")
+    bot.reply_to(message, f"✅ Пользователь @{username} переименован в «{new_nick}»")
 
 # ===== /vnick_remove =====
 @bot.message_handler(commands=['vnick_remove'])
@@ -415,6 +979,10 @@ def vnick_remove(message):
         return
     
     parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    parts = ' '.join(parts).split()
+    
     if len(parts) < 2:
         bot.reply_to(message, "❌ Используйте: `/vnick_remove @user`", parse_mode="Markdown")
         return
@@ -424,25 +992,117 @@ def vnick_remove(message):
     
     nicks = load_nicks()
     if clean not in nicks:
-        bot.reply_to(message, f"⚠️ У {username} нет клички.")
+        bot.reply_to(message, f"⚠️ У @{username} нет клички.")
         return
     
     del nicks[clean]
     save_nicks(nicks)
-    bot.reply_to(message, f"✅ Кличка {username} удалена.")
+    bot.reply_to(message, f"✅ Кличка @{username} удалена.")
 
-# ===== /vquestion =====
-@bot.message_handler(commands=['vquestion'])
-def vquestion(message):
+# ===== /vban =====
+@bot.message_handler(commands=['vban'])
+def vban(message):
     if not is_owner_or_admin(message):
         bot.reply_to(message, "⛔ Доступ только у админов.")
         return
     
-    data = load_json(QUESTIONS_FILE)
-    data["count"] = data.get("count", 0) + 1
-    save_json(QUESTIONS_FILE, data)
-    bot.reply_to(message, f"❓ Вопрос засчитан! Всего: *{data['count']}*", parse_mode="Markdown")
+    parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    parts = ' '.join(parts).split()
+    
+    username = None
+    for part in parts:
+        if part.startswith('@') and len(part) > 1:
+            uname = part[1:].lower()
+            if uname != get_bot_username():
+                username = uname
+                break
+    
+    if not username and message.reply_to_message:
+        user = message.reply_to_message.from_user
+        username = (user.username or f"user_{user.id}").lower()
+    
+    if not username:
+        bot.reply_to(message, "❌ Укажите @username (не бота).")
+        return
+    
+    clean = username.replace('@', '').lower()
+    
+    if is_banned(clean):
+        bot.reply_to(message, f"⚠️ @{username} уже забанен.")
+        return
+    
+    ban_user(clean)
+    bot.reply_to(message, f"🚫 @{username} забанен.")
 
+# ===== /vunban =====
+@bot.message_handler(commands=['vunban'])
+def vunban(message):
+    if not is_owner_or_admin(message):
+        bot.reply_to(message, "⛔ Доступ только у админов.")
+        return
+    
+    parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    parts = ' '.join(parts).split()
+    
+    username = None
+    for part in parts:
+        if part.startswith('@') and len(part) > 1:
+            uname = part[1:].lower()
+            if uname != get_bot_username():
+                username = uname
+                break
+    
+    if not username and message.reply_to_message:
+        user = message.reply_to_message.from_user
+        username = (user.username or f"user_{user.id}").lower()
+    
+    if not username:
+        bot.reply_to(message, "❌ Укажите @username (не бота).")
+        return
+    
+    clean = username.replace('@', '').lower()
+    
+    if not is_banned(clean):
+        bot.reply_to(message, f"⚠️ @{username} не забанен.")
+        return
+    
+    unban_user(clean)
+    bot.reply_to(message, f"✅ @{username} разбанен.")
+
+# ===== /vquestions_add (ДОБАВИТЬ N ВОПРОСОВ) =====
+@bot.message_handler(commands=['vquestions_add'])
+def vquestions_add(message):
+    if not is_owner_or_admin(message):
+        bot.reply_to(message, "⛔ Доступ только у админов.")
+        return
+
+    parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    parts = ' '.join(parts).split()
+
+    if len(parts) < 2:
+        bot.reply_to(message, "❌ Используйте: `/vquestions_add N`", parse_mode="Markdown")
+        return
+
+    try:
+        n = int(parts[1])
+        if n <= 0:
+            bot.reply_to(message, "❌ Число > 0")
+            return
+    except:
+        bot.reply_to(message, "❌ Введите число")
+        return
+
+    data = load_json(QUESTIONS_FILE)
+    data["count"] = data.get("count", 0) + n
+    save_json(QUESTIONS_FILE, data)
+    bot.reply_to(message, f"➕ Добавлено {n}. Всего: *{data['count']}*", parse_mode="Markdown")
+    
 # ===== /vquestions_remove =====
 @bot.message_handler(commands=['vquestions_remove'])
 def vquestions_remove(message):
@@ -497,7 +1157,6 @@ def vquestions_set(message):
 # КОМАНДЫ АДМИНОВ
 # ============================================================
 
-# ===== ДОБАВИТЬ ПО USERNAME =====
 @bot.message_handler(commands=['vadd_admin'])
 def vadd_admin(message):
     if not is_owner_username(message.from_user.username):
@@ -505,6 +1164,10 @@ def vadd_admin(message):
         return
     
     parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    parts = ' '.join(parts).split()
+    
     if len(parts) < 2 or not parts[1].startswith('@'):
         bot.reply_to(message, "❌ Используйте: `/vadd_admin @username`", parse_mode="Markdown")
         return
@@ -524,7 +1187,6 @@ def vadd_admin(message):
         f"📊 Всего админов: {len(admins)}"
     )
 
-# ===== УДАЛИТЬ ПО USERNAME =====
 @bot.message_handler(commands=['vremove_admin'])
 def vremove_admin(message):
     if not is_owner_username(message.from_user.username):
@@ -532,6 +1194,10 @@ def vremove_admin(message):
         return
     
     parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    parts = ' '.join(parts).split()
+    
     if len(parts) < 2 or not parts[1].startswith('@'):
         bot.reply_to(message, "❌ Используйте: `/vremove_admin @username`", parse_mode="Markdown")
         return
@@ -557,22 +1223,20 @@ def vremove_admin(message):
         f"📊 Всего админов: {len(admins)}"
     )
 
-# ===== СПИСОК АДМИНОВ (ВИДЯТ ВСЕ) =====
 @bot.message_handler(commands=['vadmins_list'])
 def vadmins_list(message):
     admins = load_admins()
-    text = "👥 *СПИСОК АДМИНОВ*\n\n"
-    text += f"👑 *Владелец:* {OWNER_USERNAME}\n\n"
+    text = "👥 СПИСОК АДМИНОВ\n\n"
+    text += f"👑 Владелец: {OWNER_USERNAME}\n\n"
     
     if not admins:
-        text += "📭 *Добавленных админов нет.*"
+        text += "📭 Добавленных админов нет."
     else:
-        text += f"🛡️ *Админы ({len(admins)}):*\n"
+        text += f"🛡️ Админы ({len(admins)}):\n"
         for i, username in enumerate(admins, 1):
-            # Просто выводим username как есть — подчёркивания сохранятся
             text += f"{i}. {username}\n"
     
-    bot.reply_to(message, text, parse_mode="Markdown")
+    bot.reply_to(message, text)
 
 # ============================================================
 # ПОДАРКИ (ANICARD)
@@ -595,8 +1259,11 @@ def vadd_card(message):
         bot.reply_to(message, "⛔ Доступ только у админов.")
         return
     
-    # Формат: /vadd_card РЕЙТИНГ НАЗВАНИЕ ЦЕНА
     parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    parts = ' '.join(parts).split()
+    
     if len(parts) < 4:
         bot.reply_to(message, "❌ Используйте: `/vadd_card 90 Сид 100`\n(рейтинг, название, цена)", parse_mode="Markdown")
         return
@@ -639,6 +1306,10 @@ def vremove_card(message):
         return
     
     parts = message.text.split()
+    if '@' in parts[0]:
+        parts[0] = parts[0].split('@')[0]
+    parts = ' '.join(parts).split()
+    
     if len(parts) < 2:
         bot.reply_to(message, "❌ `/vremove_card 90` (рейтинг)", parse_mode="Markdown")
         return
@@ -677,12 +1348,12 @@ def vanicard(message):
         bot.reply_to(message, "📭 *Список AniCard пуст*", parse_mode="Markdown")
         return
     
+    gifts_sorted = sorted(gifts, key=lambda x: x["price"], reverse=True)
     text = "🎁 *ПОДАРКИ ANICARD*\n\n"
-    text += "━━━━━━━━━━━━━━━━━━━━\n\n"
     
-    for g in gifts:
+    for i, g in enumerate(gifts_sorted, 1):
         emoji = get_gift_emoji(g["rating"])
-        text += f"{emoji} *{g['rating']}* — {g['name']} — {g['price']} 🪙\n"
+        text += f"🏆 *Место {i}* → {emoji} {g['rating']} — {g['name']} — {g['price']} поинтов\n"
     
     bot.reply_to(message, text, parse_mode="Markdown")
 
@@ -691,7 +1362,6 @@ def vstars(message):
     data = load_json(ANICARD_FILE)
     gifts = data.get("gifts", [])
     
-    # Фильтруем: только карты с ценой >= 15, сортируем по цене (убывание)
     filtered = [g for g in gifts if g.get("price", 0) >= 15]
     filtered.sort(key=lambda x: x["price"], reverse=True)
     
@@ -700,10 +1370,9 @@ def vstars(message):
         return
     
     text = "⭐ *ПОДАРКИ TELEGRAM (звёзды)*\n\n"
-    text += "━━━━━━━━━━━━━━━━━━━━\n\n"
     
     for i, g in enumerate(filtered, 1):
-        text += f"🏆 Место {i} → ⭐ {g['price']} звёзд ({g['name']})\n"
+        text += f"🏆 Место {i} → ⭐ {g['price']} звёзд\n"
     
     bot.reply_to(message, text, parse_mode="Markdown")
 
@@ -737,6 +1406,10 @@ def vreset(message):
     save_json(QUESTIONS_FILE, {"count": 0})
     save_nicks({})
     save_json(LIMITS_FILE, {})
+    save_json(DOB_LIMITS_FILE, {})
+    save_json(DOB_HISTORY_FILE, {})
+    save_json(BANS_FILE, {"banned": []})
+    save_json(DELETED_FILE, {})
     bot.reply_to(message, "🗑️ Всё сброшено!")
 
 # ============================================================
@@ -746,15 +1419,23 @@ def vreset(message):
 @bot.message_handler(func=lambda message: True)
 def handle_buttons(message):
     text = message.text
-    
     if text == "🏆 Таблица":
         vtop(message)
     elif text == "🎁 Подарки":
         vgifts(message)
-    elif text == "👥 Админы":
+    elif text == "🧑‍💻💼 Админы":
         vadmins_list(message)
     elif text == "📖 Помощь":
         vhelp(message)
+
+# ============================================================
+# ЗАПОМИНАНИЕ ID ВСЕХ ПОЛЬЗОВАТЕЛЕЙ
+# ============================================================
+
+@bot.message_handler(func=lambda message: True, content_types=['text'])
+def remember_all_users(message):
+    if message.from_user:
+        remember_user(message.from_user)
 
 # ============================================================
 # ЗАПУСК
